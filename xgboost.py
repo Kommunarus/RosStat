@@ -1,6 +1,8 @@
 from tsfresh import extract_features, select_features
 from tsfresh.utilities.dataframe_functions import impute
 from tsfresh import extract_relevant_features
+from tsfresh.feature_extraction import MinimalFCParameters, EfficientFCParameters
+import numpy as np
 
 import pymysql
 from pymysql.cursors import DictCursor
@@ -20,12 +22,16 @@ connection = pymysql.connect(
 
 nforecast = 12
 
+def mean_absolute_percentage_error(y_true, y_pred):
+    y_true, y_pred = np.array(y_true), np.array(y_pred)
+    return np.mean(np.abs((y_true - y_pred) / y_true)) * 100
 
 def prepareData(data, lag_start=5, lag_end=20, test_size=12):
 
     data = pd.DataFrame(data.copy())
 
 
+    test_index = int(len(data) - test_size)
 
     for i in range(lag_start, lag_end):
         data["lag_{}".format(i)] = data.price.shift(i)
@@ -33,10 +39,17 @@ def prepareData(data, lag_start=5, lag_end=20, test_size=12):
     data.ymd = pd.to_datetime(data["ymd"])
     data["year"] = data.ymd.dt.year
 
-    #features = extract_features(data[:test_index],  column_id= 'year', column_sort='ymd', n_jobs = 6, column_value = 'price')
-    #features = features.dropna()
+    features = extract_features(data[:test_index],  column_id= 'year', column_sort='ymd', n_jobs = 6,
+                                column_value = 'price',
+                                default_fc_parameters = MinimalFCParameters())
+    features = features.dropna(axis=1)
+    features['yearPast'] = features.index+1
+    #features['yearPastPast'] = features['yearPast']+1
 
+
+    data = pd.merge(data, features, left_on='year', right_on='yearPast' )
     data.drop(["year"], axis=1, inplace=True)
+    data.drop(["yearPast"], axis=1, inplace=True)
     data.drop(["ymd"], axis=1, inplace=True)
 
     data = data.dropna()
@@ -71,15 +84,15 @@ def getPredict(region, sproduct):
 
     #df.set_index('ymd')
 
-    X_train, X_test, y_train, y_test = prepareData(df, test_size=12, lag_start=12, lag_end=36)
-    lr = LinearRegression()
+    X_train, X_test, y_train, y_test = prepareData(df, test_size=12, lag_start=12, lag_end=15)
+    lr = LinearRegression(normalize=False)
     lr.fit(X_train, y_train)
     prediction = lr.predict(X_test)
-    plt.figure(figsize=(15, 7))
+    plt.figure(figsize=(10, 10))
     plt.plot(prediction, "r", label="prediction")
     plt.plot(y_test.values, label="actual")
     plt.legend(loc="best")
-    plt.title("{}\n MAE {}".format(sproduct, round(mean_absolute_error(prediction, y_test))))
+    plt.title("{}\n MAPE {}".format(sproduct, round(mean_absolute_percentage_error(y_test, prediction))))
     plt.grid(True);
     plt.show()
 
@@ -97,7 +110,8 @@ products = ['Молоко сырое крупного рогатого скот�
             'Свекла столовая',
             'Птица сельскохозяйственная живая',
             'Олени северные',
-            'Картофель']
+            'Картофель'
+ ]
 
 for sproduct in products:
     cc = getPredict(region, sproduct)
