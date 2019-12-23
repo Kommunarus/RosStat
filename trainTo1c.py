@@ -55,54 +55,21 @@ for sproduct in products:
     df = pd.read_sql(
         'SELECT ymd, price FROM price.tab WHERE region = "{}" and products="{}"'.format(region, sproduct),
         con=connection)
-    dta = df.price.values[start:]
+    dta = df.price.values[(len(df)-nforecast): (len(df)-nforecast+6)]
 
 
-    dtx = df.ymd.values[start:]
+    dtx = df.ymd.values[(len(df)-nforecast): (len(df)-nforecast+6)]
 
 
-    xt = boxcox(dta, lmbda)
-
-    warnings.simplefilter('ignore')
-
-
-    train = xt[:len(xt)-nforecast]
-
-    df = pd.read_sql(
-        'SELECT * FROM price.model WHERE region = "{}" and product="{}"'.format(region, sproduct),
-        con=connection)
-
-    for param in df.iterrows():
-
-        mod = sm.tsa.statespace.SARIMAX(train, order=(param[1].p, param[1].d, param[1].q),
-                                         seasonal_order=(param[1].sp, param[1].sd, param[1].sq, param[1].ss))
-        res = mod.fit(disp=False)
-
-
-        predict = res.get_prediction(end=mod.nobs + nforecast)
-
-        p_main = inv_boxcox(predict.predicted_mean, lmbda)
-
-        predict_ci1 = inv_boxcox(predict.conf_int(alpha=0.50)[:,0], lmbda)
-        predict_ci2 = inv_boxcox(predict.conf_int(alpha=0.50)[:,1], lmbda)
-
-        for ii in range(nforecast):
-            query = "INSERT INTO price.predict(region, product, PlanningDate, model, ymd, mean, button, up) " \
-                             "VALUES(%s,%s,%s,%s,%s,%s,%s,%s)"
-            index = ii+1
-            args = (region,
-                    sproduct,
-                    dtx[-(nforecast+1)].strftime('%Y-%m-%d %H:%M:%S'),
-                    param[1].criterion,
-                    dtx[-index].strftime('%Y-%m-%d %H:%M:%S'),
-                    float(p_main[-index]),
-                    float(predict_ci1[-index]),
-                    float(predict_ci2[-index]))
-            cursor = connection.cursor()
-            try:
-                cursor.execute(query, args)
-            except:
-                print('error')
-            connection.commit()
+    for ii in range(len(dta)):
+        query = "INSERT INTO price.fact(region, product, ymd, price) " \
+                "VALUES(%s,%s,%s,%s)"
+        args = (region,
+                sproduct,
+                dtx[ii].strftime('%Y-%m-%d %H:%M:%S'),
+                float(dta[ii]))
+        cursor = connection.cursor()
+        cursor.execute(query, args)
+        connection.commit()
 
 connection.close()

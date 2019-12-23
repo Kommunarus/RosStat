@@ -5,7 +5,7 @@ from scipy.special import boxcox, inv_boxcox
 import pymysql
 from pymysql.cursors import DictCursor
 import pandas as pd
-from modelsearch import getPredict
+from modelsearchSARIMA import getPredict
 
 connection = pymysql.connect(
     host='localhost',
