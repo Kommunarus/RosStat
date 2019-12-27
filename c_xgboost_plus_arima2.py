@@ -33,6 +33,8 @@ def prepareData(data, test_size, lag=[] , ):
 
     for i in lag:
         data["lag_{}".format(i)] = data.price.shift(i+test_size)
+    '''for i in lag:
+        data["lag__{}".format(i)] = data.ValueVal.shift(i+test_size)'''
 
     data.ymd = pd.to_datetime(data["ymd"])
     data["year"] = data.ymd.dt.year
@@ -71,7 +73,9 @@ def prepareData(data, test_size, lag=[] , ):
 
 
 def getPredictXgboost(residual, pre_arima, train_arima):
-    lag = [1, 2, 3, 4, 5, 6, ]
+
+
+    lag = [1, 2, 3, 4, 12, 24]
     X_train, X_test, y_train, y_test = prepareData(residual, test_size=nforecast, lag = lag,)
 
     dtrain = xgb.DMatrix(X_train, label=y_train)
@@ -81,18 +85,10 @@ def getPredictXgboost(residual, pre_arima, train_arima):
     params = {
         'objective': 'reg:squarederror',
         'booster': 'gbtree',
-        'max_depth': 10
+        'max_depth': 5
     }
 
-    params = {
-        'colsample_bynode': 0.8,
-        'learning_rate':0.5,
-        'max_depth': 5,
-        'num_parallel_tree': 100,
-        'objective': 'reg:squarederror',
-        'subsample': 0.8,
-        'tree_method': 'gpu_hist'
-    }
+
 
     # прогоняем на кросс-валидации с метрикой rmse
     #cv = xgb.cv(params, dtrain, metrics=('mae'), verbose_eval=False, nfold=10, show_stdv=False, num_boost_round=trees, seed=42)
@@ -124,7 +120,7 @@ def getPredictXgboost(residual, pre_arima, train_arima):
     plt.axis('tight')
     plt.grid(True)
     plt.legend()
-    plt.title("{} \n MAPE xgb+arima {} \n MAPE arima {}".format(sproduct, round(mean_absolute_percentage_error(y3, y4),2), round(mean_absolute_percentage_error(y3, pre_arima),2) ))
+    plt.title("{} \n MAPE arima {} \n MAPE xgb+arima {} ".format(sproduct, round(mean_absolute_percentage_error(y3, pre_arima),2), round(mean_absolute_percentage_error(y3, y4),2) ))
 
     plt.show()
 
@@ -134,11 +130,25 @@ def getPredictArima(region, sproduct, start = 5):
     df_train = pd.read_sql(
         'SELECT ymd, price FROM price.tab WHERE region = "{}" and products="{}"'.format(region, sproduct),
         con=connection)
+
+
+    df_valute = pd.read_sql(
+        'SELECT ValueVal, dateCalendar FROM price.valuta WHERE CharCode = "{}" '.format("USD"),
+        con=connection)
+
+
+
+    data = pd.merge(df_train, df_valute, left_on='ymd', right_on='dateCalendar')
+    ex = data.ValueVal.values[start:]
+
+
+
     dta = df_train.price.values[start:]
     dttime = df_train.ymd.values[start:]
     #dta = dta.reindex()
     xt = boxcox(dta, lmbda)
     train = xt[:len(xt) - nforecast]
+    exog = ex[:len(xt) - nforecast]
 
     df = pd.read_sql(
         'SELECT * FROM price.model WHERE region = "{}" and product="{}"'.format(region, sproduct),
@@ -148,10 +158,12 @@ def getPredictArima(region, sproduct, start = 5):
     for param in df.iterrows():
 
         mod = sm.tsa.statespace.SARIMAX(train, order=(param[1].p, param[1].d, param[1].q),
-                                         seasonal_order=(param[1].sp, param[1].sd, param[1].sq, param[1].ss))
+                                         seasonal_order=(param[1].sp, param[1].sd, param[1].sq, param[1].ss),
+                                        exog= exog)
         res = mod.fit(disp=False)
 
-        predict = res.get_prediction(end=mod.nobs + nforecast - 1)
+        exog_forecast = data.iloc[-nforecast: ] ['ValueVal'].values[..., np.newaxis]
+        predict = res.get_prediction(end=mod.nobs + nforecast - 1, exog = exog_forecast)
 
         p_main = inv_boxcox(predict.predicted_mean, lmbda)
 
