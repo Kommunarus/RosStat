@@ -97,7 +97,6 @@ def getPredictArima(region, sproduct, start = 5):
     dttime = df_train.ymd.values[start:]
     xt = boxcox(dta, lmbda)
     train = xt[:len(xt) - nforecast]
-    exog = ex[:len(xt) - nforecast]
 
     df = pd.read_sql(
         'SELECT * FROM price.model WHERE region = "{}" and product="{}" and criterion = "aic"'.format(region, sproduct),
@@ -113,27 +112,35 @@ def getPredictArima(region, sproduct, start = 5):
     predict = res.get_prediction(end=mod.nobs + nforecast - 1)
 
     p_main = inv_boxcox(predict.predicted_mean, lmbda)
+    plt.figure(figsize=(10, 8))
+    plt.plot(dta[-nforecast:], 'bs', label="fact", )
+    plt.plot(p_main[-nforecast:], 'r--', label="arima. mape {}".format(round(mean_absolute_percentage_error(dta[-nforecast:], p_main[-nforecast:]))))
 
-    mode = sm.tsa.statespace.SARIMAX(train, order=(param.p, param.d, param.q),
-                                    seasonal_order=(param.sp, param.sd, param.sq, param.ss),
-                                     exog= exog)
-    rese = mode.fit(disp=False)
+    LAG = 18
+    train = xt[LAG:len(xt) - nforecast]
 
-    exog_forecast = data.iloc[-nforecast: ] ['ValueVal'].values[..., np.newaxis]
-    predicte = rese.get_prediction(end=mode.nobs + nforecast - 1, exog = exog_forecast)
+    for lag in range(LAG):
 
-    p_maine = inv_boxcox(predicte.predicted_mean, lmbda)
+        exog = ex[lag:len(xt) - nforecast + lag - LAG]
+
+        mode = sm.tsa.statespace.SARIMAX(train, order=(param.p, param.d, param.q),
+                                        seasonal_order=(param.sp, param.sd, param.sq, param.ss),
+                                         exog= exog)
+        rese = mode.fit(disp=False)
+
+        exog_forecast = data.iloc[-nforecast - lag - 1: -lag - 1 ] ['ValueVal'].values[..., np.newaxis]
+        predicte = rese.get_prediction(end=mode.nobs + nforecast - 1, exog = exog_forecast)
+
+        p_maine = inv_boxcox(predicte.predicted_mean, lmbda)
 
 
-    plt.plot(p_main[-nforecast:], label="arima")
-    plt.plot(p_maine[-nforecast:], label="arimaX")
-    plt.plot(dta[-nforecast:], label="fact")
+        plt.plot(p_maine[-nforecast:], label="arimaX. lag {} mape {}".format(LAG-lag, round(mean_absolute_percentage_error(dta[-nforecast:], p_maine[-nforecast:]))))
+        #   mean_absolute_percentage_error(dta[-nforecast:], p_main[-nforecast:]), 2), round(mean_absolute_percentage_error(dta[-nforecast:], p_maine[-nforecast:]), 2)))
+
     plt.axis('tight')
     plt.grid(True)
     plt.legend()
-    plt.title("{} \n MAPE arima {} \n MAPE arimaX {} ".format(sproduct, round(
-        mean_absolute_percentage_error(dta[-nforecast:], p_main[-nforecast:]), 2), round(mean_absolute_percentage_error(dta[-nforecast:], p_maine[-nforecast:]), 2)))
-
+    plt.title("{} ".format(sproduct))
     plt.show()
 
 
