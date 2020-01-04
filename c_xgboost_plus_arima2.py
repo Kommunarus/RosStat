@@ -10,6 +10,7 @@ from matplotlib import pyplot as plt
 import xgboost as xgb
 from scipy.special import boxcox, inv_boxcox
 
+from sklearn.base import BaseEstimator, TransformerMixin
 
 connection = pymysql.connect(
     host='localhost',
@@ -26,6 +27,19 @@ lmbda = 0.5
 def mean_absolute_percentage_error(y_true, y_pred):
     y_true, y_pred = np.array(y_true), np.array(y_pred)
     return np.mean(np.abs((y_true - y_pred) / y_true)) * 100
+
+class AddNewData(BaseEstimator, TransformerMixin):
+    def __init__(self, data, test_size, lag=[]):
+        self.test_size = test_size
+        self.data = data
+        self.lag = lag
+
+    def fit(self, X, y=None):
+        return self
+
+    def transform(self, X):
+        return self
+
 
 def prepareData(data, test_size, lag=[] , ):
 
