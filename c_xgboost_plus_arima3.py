@@ -15,6 +15,8 @@ from matplotlib import pyplot as plt
 import xgboost as xgb
 from scipy.special import boxcox, inv_boxcox
 from sklearn.linear_model import LinearRegression
+from sklearn.preprocessing import PolynomialFeatures
+from sklearn.pipeline import Pipeline
 import matplotlib.pyplot as plt
 
 
@@ -49,6 +51,10 @@ def getTrainData(region, product, datein, dateout, lag, lagVal, lagS, test_size)
         'SELECT ymd, price FROM price.tab WHERE region = "{}" and products="{}" and ymd > "{}" and ymd < "{}"'.format(region, product, datein, dateout),
         con=connection)
 
+    if len(df_train) == 0:
+        return (df_train, 0)
+
+
     test_index = int(len(df_train) - test_size)
     df_train = df_train[:test_index]
 
@@ -60,15 +66,17 @@ def getTrainData(region, product, datein, dateout, lag, lagVal, lagS, test_size)
 
     data = pd.merge(df_train, df_valute, left_on='ymd', right_on='dateCalendar')
 
-    data["price"] = boxcox( data["price"], lmbda)
+    data["price_boxcox"] = boxcox( data["price"], lmbda)
 
 
-    trend = LinearRegression()
+    trend = Pipeline([('poly', PolynomialFeatures(degree=2)),
+                      ('linear', LinearRegression(fit_intercept=False))])
     x = data['ymd'].map(datetime.datetime.toordinal)
-    trend.fit(x.values.reshape(-1,1), data.price.values.reshape(-1,1))
+    trend.fit(x.values.reshape(-1,1), data.price_boxcox.values.reshape(-1,1))
 
     data["Trend"] =  trend.predict( data['ymd'].map(datetime.datetime.toordinal).values.reshape(-1,1))
-    data["PriceWithOutTrend"] = data["price"] - data["Trend"]
+    data["PriceWithOutTrend"] = data["price_boxcox"] - data["Trend"]
+    data.loc[data['price'] == 0, "PriceWithOutTrend"]= 0.1 # если цена равна нулю, то поставим среднюю
 
     for i in lag:
         data["PriceWithOutTrend{}".format(i)] = data.PriceWithOutTrend.shift(i)
@@ -91,6 +99,7 @@ def getTrainData(region, product, datein, dateout, lag, lagVal, lagS, test_size)
     data.loc[:, 'minPrice'] = [minPrice[month] for month in data['month']]
 
     data.drop(["price"], axis=1, inplace=True)
+    data.drop(["price_boxcox"], axis=1, inplace=True)
     data.drop(["ymd"], axis=1, inplace=True)
     data.drop(["month"], axis=1, inplace=True)
     data.drop(["dateCalendar"], axis=1, inplace=True)
@@ -128,10 +137,11 @@ def getTestData(region, product, datein, dateout, lag, lagVal, lagS, test_size, 
     data = pd.merge(df_train, df_valute, left_on='ymd', right_on='dateCalendar')
 
 
-    data["price"] = boxcox( data["price"], lmbda)
+    data["price_boxcox"] = boxcox( data["price"], lmbda)
 
     data["Trend"] =  trend.predict( data['ymd'].map(datetime.datetime.toordinal).values.reshape(-1,1))
-    data["PriceWithOutTrend"] = data["price"] - data["Trend"]
+    data["PriceWithOutTrend"] = data["price_boxcox"] - data["Trend"]
+    data.loc[data['price'] == 0, "PriceWithOutTrend"]= 0.1 # если цена равна нулю, то поставим среднюю
 
     for i in lag:
         data["PriceWithOutTrend{}".format(i)] = data.PriceWithOutTrend.shift(i)
@@ -154,6 +164,7 @@ def getTestData(region, product, datein, dateout, lag, lagVal, lagS, test_size, 
     data.loc[:, 'minPrice'] = [minPrice[month] for month in data['month']]
 
     data.drop(["price"], axis=1, inplace=True)
+    data.drop(["price_boxcox"], axis=1, inplace=True)
     data.drop(["ymd"], axis=1, inplace=True)
     data.drop(["month"], axis=1, inplace=True)
     data.drop(["dateCalendar"], axis=1, inplace=True)
@@ -165,8 +176,10 @@ def getTestData(region, product, datein, dateout, lag, lagVal, lagS, test_size, 
     return data, ytrue
 
 class myxgBoost(BaseEstimator, TransformerMixin):
-    def __init__(self, depth):
+    def __init__(self, depth, reg_lambda, reg_alpha):
         self.depth = depth
+        self.reg_lambda = reg_lambda
+        self.reg_alpha = reg_alpha
 
     def fit(self, X, y):
         dtrain = xgb.DMatrix(X, label=y)
@@ -174,8 +187,11 @@ class myxgBoost(BaseEstimator, TransformerMixin):
         # задаём параметры
         params = {
             'objective': 'reg:squarederror',
+            #'booster': 'gblinear',
             'booster': 'gbtree',
-            'max_depth': self.depth
+            'max_depth': self.depth,
+            'eval_metric': 'rmse',
+
         }
 
         self.bst = xgb.train(params, dtrain, )
@@ -217,43 +233,26 @@ def performTimeSeriesCV(X_train, y_train, number_folds, model, metrics):
     # the function returns the mean of the errors on the n-1 folds
     return errors.mean()
 
-def getPredictArima(region, sproduct, start = 5):
+def performTimeSeries(X_train, y_train, model, metrics):
 
-    ex = data.ValueVal.values[start:]
+    model.fit(X_train, y_train)
+    errors = metrics(y_train, model.predict(X_train))
 
-
-
-    dta = df_train.price.values[start:]
-    dttime = df_train.ymd.values[start:]
-    #dta = dta.reindex()
-    xt = boxcox(dta, lmbda)
-    train = xt[:len(xt) - nforecast]
-
-    df = pd.read_sql(
-        'SELECT * FROM price.model WHERE region = "{}" and product="{}"'.format(region, sproduct),
-        con=connection)
-    # Graph
-
-    for param in df.iterrows():
-
-        mod = sm.tsa.statespace.SARIMAX(train, order=(param[1].p, param[1].d, param[1].q),
-                                         seasonal_order=(param[1].sp, param[1].sd, param[1].sq, param[1].ss),
-                                        )
-        res = mod.fit(disp=False)
+    # the function returns the mean of the errors on the n-1 folds
+    return errors
 
 
-        return pd.DataFrame({'price':dta - p_main, 'ymd': dttime}), p_main[-nforecast:], dta[-nforecast:]
+#region = 'Российская Федерация'
+region = 'Ростовская область'
 
 
-region = 'Российская Федерация'
-
-
-products = ['Молоко сырое крупного рогатого скота',
+products = [
+            'Семена подсолнечника',
+            'Гречиха',
+            'Молоко сырое крупного рогатого скота',
             'Пшеница мягкая 3 класса',
             'Пшеница мягкая 5 класса',
             'Ячмень',
-            'Гречиха',
-            'Семена подсолнечника',
             'Свекла столовая',
             'Птица сельскохозяйственная живая',
             'Олени северные',
@@ -263,12 +262,14 @@ products = ['Молоко сырое крупного рогатого скот�
 for sproduct in products:
     print(sproduct)
 
-    lag = range(3, 8)
-    lag_v = range(1, 3)
-    lag_s = range(11, 13)
-    depth = range(3,10,3)
+    lag = [3,5,7,9,12,15,20]
+    lag_v = [1,2,3,5,7]
+    lag_s = [12]
+    depth = [5,10]
+    alfa = [0]
+    lamda = [0]
 
-    parameters = product(lag, lag_v, lag_s, depth)
+    parameters = product(lag, lag_v, lag_s, depth, alfa, lamda)
     parameters_list = list(parameters)
 
     err = 99999
@@ -276,52 +277,61 @@ for sproduct in products:
     for param in parameters_list:
 
         data, trend = getTrainData(region, sproduct, datein=datetime.date(2010, 1, 1), dateout=datetime.date(2020, 1, 1),
-                       lag=range(3,param[0]), lagVal=range(1,param[1]), lagS= range(11,param[2]), test_size=test_size)
+                       lag=range(1,param[0]), lagVal=range(1,param[1]), lagS= [param[2]], test_size=test_size)
 
+        if len(data) ==0:
+            continue
 
         X_train = data.drop(["PriceWithOutTrend"], axis=1)
         y_train = data["PriceWithOutTrend"]
 
-        xgbts = myxgBoost(param[3])
+        xgbts = myxgBoost(param[3],param[4],param[5])
 
-        err_par = performTimeSeriesCV(X_train, y_train, 5, xgbts, mean_absolute_percentage_error)
+        err_par = performTimeSeries(X_train, y_train, xgbts, mean_absolute_percentage_error)
         if err > err_par:
             err = err_par
             param_best = param
             xgbts_best = deepcopy(xgbts)
+            X_train_best = deepcopy(X_train)
+            y_train_best = deepcopy(y_train)
 
 
-    print('min error CV {:5.2f}'.format(err))
+    print('error {:5.2f}'.format(err))
     print(param_best)
+    if len(data) != 0:
 
-    y_past = []
-    y_true = []
-    for test_point in range(test_size):
-
-
-        data, ytrue = getTestData(region, sproduct, datein=datetime.date(2010, 1, 1), dateout=datetime.date(2020, 1, 1),
-                       lag=range(3, param_best[0]), lagVal=range(1, param_best[1]), lagS=range(11, param_best[2]),
-                       test_size=test_size, trend = trend, y_past = y_past)
+        y_past = []
+        y_true = []
+        for test_point in range(test_size):
 
 
-        X_test = data.iloc[[-1]].drop(["PriceWithOutTrend"], axis=1)
-        y_test = data.iloc[[-1]]["PriceWithOutTrend"]
+            data, ytrue = getTestData(region, sproduct, datein=datetime.date(2010, 1, 1), dateout=datetime.date(2020, 1, 1),
+                           lag=range(1, param_best[0]), lagVal=range(1, param_best[1]), lagS=[param_best[2]],
+                           test_size=test_size, trend = trend, y_past = y_past)
 
-        predict = xgbts_best.predict(X_test)
 
-        ypred = predict + X_test.Trend.values
+            X_test = data.iloc[[-1]].drop(["PriceWithOutTrend"], axis=1)
 
-        y_true.append(ytrue)
-        y_past.append(inv_boxcox(ypred[0], lmbda))
+            predict = xgbts_best.predict(X_test)
 
-    MAPE = mean_absolute_percentage_error(y_true, y_past)
-    plt.plot(y_true, label = 'true')
-    plt.plot(y_past, label = "predict")
-    plt.axis('tight')
-    plt.grid(True)
-    plt.legend()
-    plt.title("{}, mape {:.2}".format(sproduct, MAPE))
-    plt.show()
+            ypred = predict + X_test.Trend.values
+
+            y_true.append(ytrue)
+            y_past.append(inv_boxcox(ypred[0], lmbda))
+
+
+        MAPE = mean_absolute_percentage_error(y_true, y_past)
+
+        predict_X_train = xgbts_best.predict(X_train_best)
+
+        plt.plot(np.concatenate((inv_boxcox(y_train_best + X_train_best.Trend.values, lmbda) , y_true)) , label = 'true')
+        plt.plot(np.concatenate((inv_boxcox(predict_X_train + X_train_best.Trend.values, lmbda) , y_past)) , label = "predict")
+        plt.axvspan(len(predict_X_train), len(predict_X_train)+len(y_past), alpha=0.5, color='lightgrey')
+        plt.axis('tight')
+        plt.grid(True)
+        plt.legend()
+        plt.title("{}, mape {:.2f} \n {}".format(sproduct, MAPE, param_best))
+        plt.show()
 
 
     #res, pre_arima, train_arima = getPredictArima(region, sproduct)
