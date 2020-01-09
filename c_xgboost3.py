@@ -44,7 +44,7 @@ def mean_absolute_percentage_error(y_true, y_pred):
 
 
 
-def getTrainData(region, product, datein, dateout, lag, lagVal, lagS, test_size):
+def getTrainData(region, product, datein, dateout, lag, lagVal, lagS, AvPr, AvPrVal, test_size):
 
 
     df_train = pd.read_sql(
@@ -76,14 +76,15 @@ def getTrainData(region, product, datein, dateout, lag, lagVal, lagS, test_size)
 
     data["Trend"] =  trend.predict( data['ymd'].map(datetime.datetime.toordinal).values.reshape(-1,1))
     data["PriceWithOutTrend"] = data["price_boxcox"] - data["Trend"]
-    data.loc[data['price'] == 0, "PriceWithOutTrend"]= 0.1 # если цена равна нулю, то поставим среднюю
+    data.loc[data['price'] == 0, "PriceWithOutTrend"]= 0.01 # если цена равна нулю, то поставим среднюю
 
     for i in lag:
         data["PriceWithOutTrend{}".format(i)] = data.PriceWithOutTrend.shift(i)
     for i in lagS:
-        data["PriceWithOutTrend{}".format(i)] = data.PriceWithOutTrend.shift(i)
+        if i!= 0:
+           data["PriceWithOutTrend{}".format(i)] = data.PriceWithOutTrend.shift(i)
     for i in lagVal:
-        data["lagValute_{}".format(i)] = data.ValueVal.shift(i+test_size)
+        data["lagValute_{}".format(i)] = data.ValueVal.shift(i)
 
     # средние , максимум, минимум за квартал , полгода, год
     data.ymd = pd.to_datetime(data["ymd"])
@@ -98,6 +99,14 @@ def getTrainData(region, product, datein, dateout, lag, lagVal, lagS, test_size)
     data.loc[:, 'maxPrice'] = [maxPrice[month] for month in data['month']]
     data.loc[:, 'minPrice'] = [minPrice[month] for month in data['month']]
 
+    df = data.set_index('ymd').resample('MS', label='right').first()
+    df1 = df['PriceWithOutTrend'].shift().rolling(min_periods=1, window=AvPr).agg(['mean', 'median']).reset_index()
+    data = pd.merge(data, df1, on=['ymd'], how='left')
+    if AvPrVal != 0:
+        df2 = df['ValueVal'].shift().rolling(min_periods=1, window=AvPrVal).agg(['mean', 'median']).reset_index()
+        data = pd.merge(data, df2, on=['ymd'], how='left')
+
+
     data.drop(["price"], axis=1, inplace=True)
     data.drop(["price_boxcox"], axis=1, inplace=True)
     data.drop(["ymd"], axis=1, inplace=True)
@@ -110,7 +119,7 @@ def getTrainData(region, product, datein, dateout, lag, lagVal, lagS, test_size)
 
     return data, trend
 
-def getTestData(region, product, datein, dateout, lag, lagVal, lagS, test_size, trend, y_past):
+def getTestData(region, product, datein, dateout, lag, lagVal, lagS, test_size, trend, AvPr, AvPrVal, y_past):
 
     df_train = pd.read_sql(
         'SELECT ymd, price FROM price.tab WHERE region = "{}" and products="{}" and ymd > "{}" and ymd < "{}"'.format(region, product, datein, dateout),
@@ -146,9 +155,10 @@ def getTestData(region, product, datein, dateout, lag, lagVal, lagS, test_size, 
     for i in lag:
         data["PriceWithOutTrend{}".format(i)] = data.PriceWithOutTrend.shift(i)
     for i in lagS:
-        data["PriceWithOutTrend{}".format(i)] = data.PriceWithOutTrend.shift(i)
+        if i!= 0:
+            data["PriceWithOutTrend{}".format(i)] = data.PriceWithOutTrend.shift(i)
     for i in lagVal:
-        data["lagValute_{}".format(i)] = data.ValueVal.shift(i+test_size)
+        data["lagValute_{}".format(i)] = data.ValueVal.shift(i)
 
     # средние , максимум, минимум за квартал , полгода, год
     data.ymd = pd.to_datetime(data["ymd"])
@@ -163,6 +173,13 @@ def getTestData(region, product, datein, dateout, lag, lagVal, lagS, test_size, 
     data.loc[:, 'maxPrice'] = [maxPrice[month] for month in data['month']]
     data.loc[:, 'minPrice'] = [minPrice[month] for month in data['month']]
 
+    df = data.set_index('ymd').resample('MS', label='right').first()
+    df1 = df['PriceWithOutTrend'].shift().rolling(min_periods=1, window=AvPr).agg(['mean', 'median']).reset_index()
+    data = pd.merge(data, df1, on=['ymd'], how='left')
+    if AvPrVal != 0:
+        df2 = df['ValueVal'].shift().rolling(min_periods=1, window=AvPrVal).agg(['mean', 'median']).reset_index()
+        data = pd.merge(data, df2, on=['ymd'], how='left')
+
     data.drop(["price"], axis=1, inplace=True)
     data.drop(["price_boxcox"], axis=1, inplace=True)
     data.drop(["ymd"], axis=1, inplace=True)
@@ -176,7 +193,7 @@ def getTestData(region, product, datein, dateout, lag, lagVal, lagS, test_size, 
     return data, ytrue
 
 class myxgBoost(BaseEstimator, TransformerMixin):
-    def __init__(self, depth, reg_lambda, reg_alpha):
+    def __init__(self, depth, reg_lambda=0, reg_alpha=0):
         self.depth = depth
         self.reg_lambda = reg_lambda
         self.reg_alpha = reg_alpha
@@ -242,8 +259,8 @@ def performTimeSeries(X_train, y_train, model, metrics):
     return errors
 
 
-#region = 'Российская Федерация'
-region = 'Ростовская область'
+region = 'Российская Федерация'
+#region = 'Краснодарский край'
 
 
 products = [
@@ -262,14 +279,13 @@ products = [
 for sproduct in products:
     print(sproduct)
 
-    lag = [3,5,7,9,12,15,20]
-    lag_v = [1,2,3,5,7]
-    lag_s = [12]
-    depth = [5,10]
-    alfa = [0]
-    lamda = [0]
+    lag = [3,5,7,9]
+    lag_v = [0,1,2,3]
+    lag_s = [0,12]
+    AvPr = [2,4,6]
+    AvPrVal = [0,2,4]
 
-    parameters = product(lag, lag_v, lag_s, depth, alfa, lamda)
+    parameters = product(lag, lag_v, lag_s, AvPr, AvPrVal)
     parameters_list = list(parameters)
 
     err = 99999
@@ -277,7 +293,7 @@ for sproduct in products:
     for param in parameters_list:
 
         data, trend = getTrainData(region, sproduct, datein=datetime.date(2010, 1, 1), dateout=datetime.date(2020, 1, 1),
-                       lag=range(1,param[0]), lagVal=range(1,param[1]), lagS= [param[2]], test_size=test_size)
+                       lag=range(1,param[0]), lagVal=range(1,param[1]), lagS= [param[2]], AvPr = param[3], AvPrVal = param[4], test_size=test_size)
 
         if len(data) ==0:
             continue
@@ -285,7 +301,7 @@ for sproduct in products:
         X_train = data.drop(["PriceWithOutTrend"], axis=1)
         y_train = data["PriceWithOutTrend"]
 
-        xgbts = myxgBoost(param[3],param[4],param[5])
+        xgbts = myxgBoost(7)
 
         err_par = performTimeSeries(X_train, y_train, xgbts, mean_absolute_percentage_error)
         if err > err_par:
@@ -298,16 +314,51 @@ for sproduct in products:
 
     print('error {:5.2f}'.format(err))
     print(param_best)
+
+    lag = [3,5,7,9]
+    lag_s = [0,12]
+    AvPr = [2,4,6]
+
+    parameters = product(lag, lag_s, AvPr)
+    parameters_list = list(parameters)
+
+    err = 99999
+    param_best_withoutVal = []
+    for param in parameters_list:
+
+        data_withoutVal, trend_withoutVal = getTrainData(region, sproduct, datein=datetime.date(2010, 1, 1), dateout=datetime.date(2020, 1, 1),
+                       lag=range(1,param[0]), lagVal=[], lagS= [param[1]], AvPr = param[2], AvPrVal = 0, test_size=test_size)
+
+        if len(data_withoutVal) ==0:
+            continue
+
+        X_train = data_withoutVal.drop(["PriceWithOutTrend"], axis=1)
+        y_train = data_withoutVal["PriceWithOutTrend"]
+
+        xgbts = myxgBoost(7)
+
+        err_par = performTimeSeries(X_train, y_train, xgbts, mean_absolute_percentage_error)
+        if err > err_par:
+            err = err_par
+            param_best_withoutVal = param
+            xgbts_best_withoutVal = deepcopy(xgbts)
+            X_train_best_withoutVal = deepcopy(X_train)
+            y_train_best_withoutVal = deepcopy(y_train)
+
+
     if len(data) != 0:
 
         y_past = []
+        y_past2 = []
+
         y_true = []
+        y_true2 = []
         for test_point in range(test_size):
 
 
             data, ytrue = getTestData(region, sproduct, datein=datetime.date(2010, 1, 1), dateout=datetime.date(2020, 1, 1),
                            lag=range(1, param_best[0]), lagVal=range(1, param_best[1]), lagS=[param_best[2]],
-                           test_size=test_size, trend = trend, y_past = y_past)
+                           test_size=test_size, trend = trend, AvPr = param_best[3], AvPrVal = param_best[4], y_past = y_past)
 
 
             X_test = data.iloc[[-1]].drop(["PriceWithOutTrend"], axis=1)
@@ -319,18 +370,46 @@ for sproduct in products:
             y_true.append(ytrue)
             y_past.append(inv_boxcox(ypred[0], lmbda))
 
+            #без вылюты
+
+            data_withoutVal, ytrue_withoutVal = getTestData(region, sproduct, datein=datetime.date(2010, 1, 1), dateout=datetime.date(2020, 1, 1),
+                                      lag=range(1, param_best_withoutVal[0]), lagVal=[], lagS=[param_best_withoutVal[1]],
+                                      test_size=test_size, trend=trend_withoutVal, AvPr = param_best_withoutVal[2], AvPrVal = 0, y_past=y_past2)
+
+            X_test_withoutVal = data_withoutVal.iloc[[-1]].drop(["PriceWithOutTrend"], axis=1)
+
+            predict_withoutVal = xgbts_best_withoutVal.predict(X_test_withoutVal)
+
+            ypred_withoutVal = predict_withoutVal + X_test_withoutVal.Trend.values
+
+            y_true2.append(ytrue_withoutVal)
+            y_past2.append(inv_boxcox(ypred_withoutVal[0], lmbda))
 
         MAPE = mean_absolute_percentage_error(y_true, y_past)
+        MAPE2 = mean_absolute_percentage_error(y_true2, y_past2)
 
         predict_X_train = xgbts_best.predict(X_train_best)
+        predict_X_train_withoutVal = xgbts_best_withoutVal.predict(X_train_best_withoutVal)
 
-        plt.plot(np.concatenate((inv_boxcox(y_train_best + X_train_best.Trend.values, lmbda) , y_true)) , label = 'true')
-        plt.plot(np.concatenate((inv_boxcox(predict_X_train + X_train_best.Trend.values, lmbda) , y_past)) , label = "predict")
-        plt.axvspan(len(predict_X_train), len(predict_X_train)+len(y_past), alpha=0.5, color='lightgrey')
-        plt.axis('tight')
-        plt.grid(True)
-        plt.legend()
-        plt.title("{}, mape {:.2f} \n {}".format(sproduct, MAPE, param_best))
+        fig, axs = plt.subplots(2)
+
+
+        axs[0].plot(np.concatenate((inv_boxcox(y_train_best + X_train_best.Trend.values, lmbda) , y_true)) , label = 'true')
+        axs[0].plot(np.concatenate((inv_boxcox(predict_X_train + X_train_best.Trend.values, lmbda) , y_past)) , label = "predict")
+        axs[0].axvspan(len(predict_X_train), len(predict_X_train)+len(y_past), alpha=0.5, color='lightgrey')
+        axs[0].axis('tight')
+        axs[0].grid(True)
+        axs[0].legend()
+        axs[0].set_title("{}, mape {:.2f} \n {}".format(sproduct, MAPE, param_best))
+
+        axs[1].plot(np.concatenate((inv_boxcox(y_train_best_withoutVal + X_train_best_withoutVal.Trend.values, lmbda) , y_true2)) , label = 'true')
+        axs[1].plot(np.concatenate((inv_boxcox(predict_X_train_withoutVal + X_train_best_withoutVal.Trend.values, lmbda) , y_past2)) , label = "predict_withoutVal")
+        axs[1].axvspan(len(predict_X_train_withoutVal), len(predict_X_train_withoutVal)+len(y_past2), alpha=0.5, color='lightgrey')
+        axs[1].axis('tight')
+        axs[1].grid(True)
+        axs[1].legend()
+        axs[1].set_title("{}, mape {:.2f} \n {}".format(sproduct, MAPE2, param_best_withoutVal))
+
         plt.show()
 
 
