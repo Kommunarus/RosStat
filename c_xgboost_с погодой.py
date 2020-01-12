@@ -57,44 +57,19 @@ def me(y_true, y_pred):
     y_true, y_pred = np.array(y_true), np.array(y_pred)
     return np.mean((y_true - y_pred))
 
-def getTestData(region, product, datein, dateout, lag =[], lagVal =[], lagS =[], test_size = 12, AvPr = 0, AvPrVal = 0, winWeather = 0, us = False, y_past=[]):
+def getTestData(datal, lag =[], lagVal =[], lagS =[], AvPr = 0, AvPrVal = 0, winWeather = 0, us = False, y_past=[]):
 
     global trend
+    data = datal.copy()
 
-    df_train = pd.read_sql(
-        'SELECT ymd, price FROM price.tab WHERE region = "{}" and products="{}" and ymd > "{}" and ymd < "{}"'.format(region, product, datein, dateout),
-        con=connection)
-
-    if len(df_train) == 0:
-        return (df_train, 0)
-
-    test_index = int(len(df_train) - test_size)
-
-    ytrue       = df_train.iloc[test_index+len(y_past), :].price
-
-    df_train = df_train[:test_index]
-
-    past_ymd = df_train.iloc[-1,:].ymd
-
-    if len(y_past) != 0:
-        for indd,  past_value in enumerate(y_past):
-            df_train = df_train.append({'price': past_value, 'ymd': past_ymd+relativedelta(months=+1)}, ignore_index=True)
-        past_ymd = past_ymd + relativedelta(months=+(1+len(y_past)))
-        df_train = df_train.append({'price': 0, 'ymd': past_ymd }, ignore_index=True)
-
-    df_valute = pd.read_sql(
-        'SELECT ValueVal, dateCalendar FROM price.valuta WHERE CharCode = "{}" '.format("USD"),
-        con=connection)
-
-
-
-    data = pd.merge(df_train, df_valute, left_on='ymd', right_on='dateCalendar')
 
     data["ymd"]   = pd.to_datetime(data["ymd"])
     data["month"] = data.ymd.dt.month
 
     data = data.replace({"price": {0: np.nan}})
     data["price"].interpolate(inplace =True)
+    data = data.fillna(method='bfill')
+
 
     data["price_boxcox"] = boxcox( data["price"], lmbda)
 
@@ -182,7 +157,7 @@ def getTestData(region, product, datein, dateout, lag =[], lagVal =[], lagS =[],
     #data = data.dropna()
     data = data.reset_index(drop=True)
 
-    return data, ytrue
+    return data
 
 class myxgBoost(BaseEstimator, TransformerMixin):
     def __init__(self, depth, reg_lambda=0, reg_alpha=0):
@@ -201,8 +176,8 @@ class myxgBoost(BaseEstimator, TransformerMixin):
             'max_depth': self.depth,
             #'eval_metric': 'rmse',
             'lambda' : 0.1,
-            #'min_child_weight ' : 3,
-            #'subsample': 0.8,
+            'min_child_weight ' : 3,
+            'subsample': 0.8,
             #'num_parallel_tree': 100,
             #'tree_method': 'gpu_hist',
             #'colsample_bynode': 0.8,
@@ -222,73 +197,100 @@ def performTimeSeries(X_train, y_train, model, metrics):
 
     model.fit(X_train, y_train)
     errors = metrics(y_train, model.predict(X_train))
-    print(errors)
+    #print(errors)
     # the function returns the mean of the errors on the n-1 folds
     return errors
 
 
-def predict_dot(region, sproduct, param_best_all, xgbts_best_all, y_true, y_past):
-    data, ytrue = getTestData(region, sproduct, datein=datetime.date(2011, 1, 1), dateout=datetime.date(2020, 1, 1),
-                              lag=range(1, param_best_all[0]), lagVal=range(1, param_best_all[1]),
-                              lagS=[param_best_all[2]],
-                              AvPr=param_best_all[3], AvPrVal=param_best_all[4], winWeather=param_best_all[5],
-                              us=param_best_all[6], y_past=y_past, test_size=test_size, )
+def predict_dot(df_train, df_valute, param_b, xgbts_b, y_true, y_past):
 
-    X_test = data.iloc[[-1]].drop(["PriceWithOutTrend"], axis=1)
+    df_train_copy = df_train.copy()
+    test_index = int(len(df_train_copy) - test_size)
 
-    predict = xgbts_best_all.predict(X_test)
+    ytrue = df_train_copy.iloc[test_index + len(y_past), :].price
+    y_true.append(ytrue)
+    df_train_copy = df_train_copy[:test_index]
+
+    past_ymd = df_train_copy.iloc[-1, :].ymd
+
+    if len(y_past) != 0:
+        for indd, past_value in enumerate(y_past):
+            df_train_copy = df_train_copy.append({'price': past_value, 'ymd': past_ymd + relativedelta(months=+1)},
+                                                 ignore_index=True)
+        past_ymd = past_ymd + relativedelta(months=+(1 + len(y_past)))
+        df_train_copy = df_train_copy.append({'price': 0, 'ymd': past_ymd}, ignore_index=True)
+    data = pd.merge(df_train_copy, df_valute, left_on='ymd', right_on='dateCalendar')
+
+    datatab = getTestData(data,
+                                 lag=range(1, param_b[0]), lagVal=range(1, param_b[1]),
+                                 lagS=[param_b[2]],
+                                 AvPr=param_b[3], AvPrVal=param_b[4], winWeather=param_b[5],
+                                 us=param_b[6], y_past=y_past,  )
+
+    X_test = datatab.iloc[[-1]].drop(["PriceWithOutTrend"], axis=1)
+
+    predict = xgbts_b.predict(X_test)
 
     ypred = predict + X_test.Trend.values
 
-    y_true.append(ytrue)
     y_past.append(inv_boxcox(ypred[0], lmbda))
 
-    return (y_true, y_past)
+    return 1
 
-region = 'Российская Федерация'
-#region = 'Краснодарский край'
+#region = 'Российская Федерация'
+region = 'Краснодарский край'
 
 
-products = [
-            #'Семена подсолнечника',
-            #'Гречиха',
-            #'Молоко сырое крупного рогатого скота',
-            #'Пшеница мягкая 3 класса',
-            #'Пшеница мягкая 5 класса',
-            #'Ячмень',
-            #'Свекла столовая',
-            #'Птица сельскохозяйственная живая',
-            'Олени северные',
-            #'Картофель'
- ]
+df_train = pd.read_sql(
+        'select products from price.tab where region = "Краснодарский край" group by products',
+        con=connection)
 
-for sproduct in products:
-    print(sproduct)
+prod = ['Виноград']
 
-    lag = [2,4,6,8,10]
-    lag_v = [0,6]
+for sproduct in df_train.products:
+for sproduct in df_train.products:
+        print(sproduct)
+
+    lag = [3,6,9]
     lag_s = [0,12]
     AvPr = [0,3,6]
-    AvPrVal = [0]
-    us = [False, True]
-    winWeather = [0]
+    lag_v = [0,3]
+    AvPrVal = [0,3]
+    us = [False]
+    winWeather = [0,180]
 
-    parameters = product(lag, lag_v, lag_s, AvPr, AvPrVal, winWeather, us)
+
+
+    parameters = product(lag, lag_v, lag_s, AvPr, AvPrVal, winWeather, us )
     parameters_list = list(parameters)
 
     err = 99999
     param_best = []
     all_param = []
+
+    df_train = pd.read_sql(
+        'SELECT ymd, price FROM price.tab WHERE region = "{}" and products="{}" and ymd > "{}" and ymd < "{}"'.format(region, sproduct, datetime.date(2011, 1, 1), datetime.date(2020, 1, 1)),
+        con=connection)
+
+    if len(df_train) == 0:
+        continue
+
+    df_valute = pd.read_sql(
+        'SELECT ValueVal, dateCalendar FROM price.valuta WHERE CharCode = "{}" '.format("USD"),
+        con=connection)
+
+
+    data = pd.merge(df_train, df_valute, left_on='ymd', right_on='dateCalendar')
+
+
     for param in parameters_list:
 
-        data, _ = getTestData(region, sproduct, datein=datetime.date(2011, 1, 1), dateout=datetime.date(2020, 1, 1),
-                       lag=range(1,param[0]), lagVal=range(1,param[1]), lagS= [param[2]], AvPr = param[3], AvPrVal = param[4], winWeather = param[5], us = param[6], test_size=test_size)
+        datatab= getTestData(data, lag=range(1,param[0]), lagVal=range(1,param[1]), lagS= [param[2]],
+                                 AvPr = param[3], AvPrVal = param[4], winWeather = param[5], us = param[6], )
 
-        if len(data) ==0:
-            continue
 
-        X_train = data.drop(["PriceWithOutTrend"], axis=1)
-        y_train = data["PriceWithOutTrend"]
+        X_train = datatab.drop(["PriceWithOutTrend"], axis=1)
+        y_train = datatab["PriceWithOutTrend"]
 
         xgbts = myxgBoost(5)
 
@@ -306,54 +308,52 @@ for sproduct in products:
     print('error {:5.2f}'.format(err))
     print(param_best)
 
-    if len(data) != 0:
 
-        err = 99999
-        param_best_test = []
-        for all_p in all_param:
-            param_best_all, xgbts_best_all = all_p[1], all_p[2]
-
-            y_past = []
-            y_true = []
-            for test_point in range(test_size):
-                predict_dot(region, sproduct, param_best_all, xgbts_best_all, y_true, y_past)
-
-
-            MAPE = mape(y_true, y_past)
-            if err > MAPE:
-                err = MAPE
-                param_best_test = all_p
-                xgbts_best_test = deepcopy(xgbts_best_all)
-
-            #predict_X_train = xgbts_best.predict(X_train_best)
-
-            #fig, axs = plt.subplots(2, figsize=(9,13))
-
-
-            plt.plot(y_past )
-            #plt.plot(y_past, label="predict {:.2f}".format(MAPE))
-#            plt.plot(np.concatenate((inv_boxcox(predict_X_train + X_train_best.Trend.values, lmbda) , y_past)) , label = "predict")
-
-        plt.plot(y_true, '+', label='true')
+    err = 99999
+    param_best_test = []
+    for all_p in all_param:
+        param_best_all, xgbts_best_all = all_p[1], all_p[2]
 
         y_past = []
         y_true = []
         for test_point in range(test_size):
-            predict_dot(region, sproduct, param_best_test, xgbts_best_test, y_true, y_past)
-            plt.plot(y_past, '*', label='best')
-
-        #        plt.plot(np.concatenate((inv_boxcox(y_train_best + X_train_best.Trend.values, lmbda), y_true)), label='true')
-        #plt.axvspan(len(predict_X_train), len(predict_X_train)+len(y_past), alpha=0.5, color='lightgrey')
-        plt.axis('tight')
-        plt.grid(True)
-        plt.legend()
-        plt.title("{}, mape {:.2f} \n {} \n {}".format(sproduct, MAPE, param_best, param_best_test))
+            predict_dot(df_train, df_valute, param_best_all, xgbts_best_all, y_true, y_past)
 
 
-        plt.show()
+        MAPE = mape(y_true, y_past)
+        if err > MAPE:
+            err = MAPE
+            param_best_test = param_best_all
+            xgbts_best_test = deepcopy(xgbts_best_all)
 
 
-    #res, pre_arima, train_arima = getPredictArima(region, sproduct)
-    #cc = getPredictXgboost(res, pre_arima, train_arima)
+        plt.plot(y_past )
+
+
+    y_past = []
+    y_true = []
+    for test_point in range(test_size):
+        predict_dot(df_train, df_valute, param_best_test, xgbts_best_test, y_true, y_past)
+    plt.plot(y_past, 'ro--', linewidth=10, label='best for test')
+    MAPE_best_test = mape(y_true, y_past)
+    y_past = []
+    y_true = []
+    for test_point in range(test_size):
+        predict_dot(df_train, df_valute, param_best, xgbts_best, y_true, y_past)
+    plt.plot(y_past, 'mo--', linewidth=10, label='best for train')
+    plt.plot(y_true, 'yo-', linewidth=10, label='true')
+    MAPE_best = mape(y_true, y_past)
+
+    plt.axis('tight')
+    plt.grid(True)
+    plt.legend()
+    plt.title("{} \n mape {:.2f} {} \n mape {:.2f} {}".format(sproduct, MAPE_best, param_best, MAPE_best_test, param_best_test))
+
+
+    plt.show()
+
+
+#res, pre_arima, train_arima = getPredictArima(region, sproduct)
+#cc = getPredictXgboost(res, pre_arima, train_arima)
 
 connection.close()
