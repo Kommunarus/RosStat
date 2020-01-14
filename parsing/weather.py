@@ -27,9 +27,9 @@ df = pd.read_sql(
 for rowdf in df.iterrows():
 
     for year in range(2011,2020):
-        for month in range(1,13):
+        for month in [2]:
 
-            params = {'bday':1, 'fday':31, 'amonth':month, 'ayear':year, 'bot':2}
+            params = {'bday':29, 'fday':29, 'amonth':month, 'ayear':year, 'bot':2}
             r = requests.get('http://www.pogodaiklimat.ru{}'.format(rowdf[1].id), params=params)
             r.encoding = r.apparent_encoding
 

@@ -34,8 +34,8 @@ connection = pymysql.connect(
     cursorclass=DictCursor
 )
 
-lmbda = 0.25
-test_size = 9
+lmbda = 1
+test_size = 12
 
 trend = None
 
@@ -56,6 +56,14 @@ def me(y_true, y_pred):
     y_true, y_pred = np.array(y_true), np.array(y_pred)
     return np.mean((y_true - y_pred))
 
+def f_index_month(row):
+    if row['ymd'].month in (4, 11) and row['ymd'].day == 1:
+        val = 1
+    else:
+        val = 0
+    return val
+
+
 def getTestData(datal, lag =[], lagVal =[], lagS =[], AvPr = 0, AvPrVal = 0, winWeather = 0, us = False, y_past=[],  tr = 1):
 
     global trend
@@ -64,11 +72,12 @@ def getTestData(datal, lag =[], lagVal =[], lagS =[], AvPr = 0, AvPrVal = 0, win
 
     data["ymd"]   = pd.to_datetime(data["ymd"])
     data["month"] = data.ymd.dt.month
+    data["year"] = data.ymd.dt.year
     data['yearofchange'] = (data["ymd"] > datetime.datetime(2015,1,1))
 
     data = data.replace({"price": {0: np.nan}})
     data["price"].interpolate(inplace =True)
-
+    
     data = data.fillna(method='bfill')
 
 
@@ -89,23 +98,23 @@ def getTestData(datal, lag =[], lagVal =[], lagS =[], AvPr = 0, AvPrVal = 0, win
 
     data["PriceWithOutTrend"] = data["price_boxcox"] - data["Trend"]
 
-    data["diff"] = data["PriceWithOutTrend"] - data["PriceWithOutTrend"].shift(1)
+    #data["diff"] = data["PriceWithOutTrend"] - data["PriceWithOutTrend"].shift(1)
     #data["diff2"] = data["PriceWithOutTrend"] - data["PriceWithOutTrend"].shift(2)
-    data.loc[0, "diff"] = 0
+    #data.loc[0, "diff"] = 0
     #data.loc[[0,1], "diff2"] = 0
     #data.loc[data['price'] == 0, "PriceWithOutTrend"]= 0.1 # если цена равна нулю, то поставим среднюю
 
 
     for i in lag:
         data["PriceWithOutTrend{}".format(i)] = data.PriceWithOutTrend.shift(i)
-        data["PriceWithOutTrend{}".format(i)].fillna(0, inplace=True)
+        #data["PriceWithOutTrend{}".format(i)].fillna(0, inplace=True)
     for i in lagS:
         if i!= 0:
             data["PriceWithOutTrendS{}".format(i)] = data.PriceWithOutTrend.shift(i)
-            data["PriceWithOutTrendS{}".format(i)].fillna(0, inplace=True)
+            #data["PriceWithOutTrendS{}".format(i)].fillna(0, inplace=True)
     for i in lagVal:
         data["lagValute{}".format(i)] = data.ValueVal.shift(i)
-        data["lagValute{}".format(i)].fillna(0, inplace=True)
+        #data["lagValute{}".format(i)].fillna(0, inplace=True)
 
     # средние , максимум, минимум за квартал , полгода, год
 
@@ -124,7 +133,7 @@ def getTestData(datal, lag =[], lagVal =[], lagS =[], AvPr = 0, AvPrVal = 0, win
         df1 = df['PriceWithOutTrend'].shift().rolling(min_periods=1, window=AvPr).agg(['mean']).reset_index()
         df1 = df1.add_suffix('_AvPr')
         data = pd.merge(data, df1, left_on=['ymd'], right_on=['ymd_AvPr'], how='left')
-        data["mean_AvPr"].fillna(0, inplace=True)
+        #data["mean_AvPr"].fillna(0, inplace=True)
         data.drop(["ymd_AvPr"], axis=1, inplace=True)
 
         for i in lag:
@@ -136,22 +145,29 @@ def getTestData(datal, lag =[], lagVal =[], lagS =[], AvPr = 0, AvPrVal = 0, win
         df2 = df['ValueVal'].shift().rolling(min_periods=1, window=AvPrVal).agg(['mean']).reset_index()
         df2 = df2.add_suffix('_AvPrVal')
         data = pd.merge(data, df2, left_on=['ymd'], right_on=['ymd_AvPrVal'], how='left')
-        data["mean_AvPrVal"].fillna(0, inplace=True)
+        #data["mean_AvPrVal"].fillna(0, inplace=True)
         data.drop(["ymd_AvPrVal"], axis=1, inplace=True)
 
     if winWeather != 0:
-        dt_weather = pd.read_sql('SELECT UTC as ymd, T, R FROM price.weather WHERE id = "/weather.php?id=37099"',  con=connection)
+        dt_weather = pd.read_sql('SELECT UTC as ymd, T, R FROM price.weather WHERE id = "/weather.php?id=37006"',  con=connection)
         df = dt_weather.set_index('ymd').resample('D', label='right').agg({'T': 'mean', 'R': 'mean'})
-        df1 = df['T'].shift().rolling(min_periods=1, window=winWeather).agg(['mean', 'sum']).reset_index()
-        df2 = df['R'].shift().rolling(min_periods=1, window=winWeather).agg(['sum']).reset_index()
-        data = pd.merge(data, df1, on=['ymd'], how='left', suffixes=('data', 'df1'))
-        data = pd.merge(data, df2, on=['ymd'], how='left', suffixes=('data', 'df2'))
+        df['ymd'] = df.index
+        df['indexmonth'] = df.apply(f_index_month, axis=1)
+        df['indexmonth'] = df['indexmonth'].cumsum()
+        df['cumT'] = df.groupby('indexmonth')['T'].cumsum()
+        df['cumR'] = df.groupby('indexmonth')['R'].cumsum()
+        df.loc[ df['indexmonth'] % 2 == 0, 'cumT'] = 0
+        df.loc[ df['indexmonth'] % 2 == 0, 'cumR'] = 0
+        df.drop('ymd', inplace = True, axis=1,)
+        df.drop('indexmonth', inplace = True, axis=1,)
+        data = pd.merge(data, df, on=['ymd'], how='left', suffixes=('data', 'dt_weather'))
+        #data = pd.merge(data, df, on=['ymd'], how='left', suffixes=('data', 'df2'))
 
 
     data.drop(["price"], axis=1, inplace=True)
     data.drop(["price_boxcox"], axis=1, inplace=True)
     #data.drop(["ymd"], axis=1, inplace=True)
-    data.drop(["month"], axis=1, inplace=True)
+    #data.drop(["month"], axis=1, inplace=True)
     data.drop(["dateCalendar"], axis=1, inplace=True)
     #data.drop(["Trend"], axis=1, inplace=True)
 
@@ -172,8 +188,8 @@ class myxgBoost(BaseEstimator, TransformerMixin):
         # задаём параметры
         params = {
             'objective': 'reg:squarederror',
-            'booster': 'gblinear',
-            #'booster': 'gbtree',
+            #'booster': 'gblinear',
+            'booster': 'gbtree',
             'max_depth': self.depth,
             #'eval_metric': 'rmse',
             #'lambda' : 0.1,
@@ -201,6 +217,35 @@ def performTimeSeries(X_train, y_train, model, metrics):
     #print(errors)
     # the function returns the mean of the errors on the n-1 folds
     return errors
+
+def performTimeSeriesCV(X_train, y_train, number_folds, model, metrics):
+
+    k = int(np.floor(float(X_train.shape[0]) / number_folds))
+
+    errors = np.zeros(number_folds-1)
+
+    # loop from the first 2 folds to the total number of folds
+    for i in range(2, number_folds + 1):
+        split = float(i-1)/i
+
+        X = X_train[:(k*i)]
+        y = y_train[:(k*i)]
+
+        index = int(np.floor(X.shape[0] * split))
+
+        # folds used to train the model
+        X_trainFolds = X[:index]
+        y_trainFolds = y[:index]
+
+        # fold used to test the model
+        X_testFold = X[(index + 1):]
+        y_testFold = y[(index + 1):]
+
+        model.fit(X_trainFolds, y_trainFolds)
+        errors[i-2] = metrics(model.predict(X_testFold), y_testFold)
+
+    # the function returns the mean of the errors on the n-1 folds
+    return errors.mean()
 
 
 def predict_dot(df_train, df_valute, param_b, xgbts_b, y_true, y_past, ymd_test):
@@ -255,14 +300,14 @@ products = [
  ]
 
 
-lag = [12,18,24]
+lag = [24]
 lag_s = [0]
 AvPr = [0]
 lag_v = [0,1]
 AvPrVal = [0]
-us = [False]
-winWeather = [0]
-trend_param = [0,1,2]
+us = [True]
+winWeather = [0, 1]
+trend_param = [1,2]
 
 for sproduct in products:
     print(sproduct)
@@ -299,9 +344,9 @@ for sproduct in products:
         X_train = datatab.drop(["PriceWithOutTrend"], axis=1)
         y_train = datatab["PriceWithOutTrend"]
 
-        xgbts = myxgBoost(5)
+        xgbts = myxgBoost(3)
 
-        err_par = performTimeSeries(X_train, y_train, xgbts, mape)
+        err_par = performTimeSeriesCV(X_train, y_train, 5, xgbts, mape)
 
         all_param.append([err_par, param, deepcopy(xgbts)])
         if err > np.abs(err_par):
@@ -318,7 +363,7 @@ for sproduct in products:
 
     err = float('inf')
     param_best_test = []
-    for all_p in all_param:
+    '''for all_p in all_param:
         param_best_all, xgbts_best_all = all_p[1], all_p[2]
 
         y_past = []
@@ -332,20 +377,20 @@ for sproduct in products:
         if err > MAPE:
             err = MAPE
             param_best_test = param_best_all
-            xgbts_best_test = deepcopy(xgbts_best_all)
+            xgbts_best_test = deepcopy(xgbts_best_all)'''
 
 
         #plt.plot(ymd_test, y_past )
 
 
     plt.figure(figsize=(10,10))
-    y_past = []
+    '''y_past = []
     y_true = []
     ymd_test = []
     for test_point in range(test_size):
         predict_dot(df_train, df_valute, param_best_test, xgbts_best_test, y_true, y_past, ymd_test)
     plt.plot(ymd_test, y_past, 'ro--', linewidth=3, label='best for test')
-    MAPE_best_test = mape(y_true, y_past)
+    MAPE_best_test = mape(y_true, y_past)'''
     y_past = []
     y_true = []
     ymd_test = []
@@ -361,7 +406,7 @@ for sproduct in products:
     plt.axis('tight')
     plt.grid(True)
     plt.legend()
-    plt.title("{} \n mape {:.2f} {} \n mape {:.2f} {}".format(sproduct, MAPE_best, param_best, MAPE_best_test, param_best_test))
+    plt.title("{} \n mape {:.2f} {} ".format(sproduct, MAPE_best, param_best))
 
 
     plt.show()
