@@ -44,7 +44,6 @@ def getTestData(datal, lag=0, lagVal =0, lagS =0, AvPr = 0, winWeather=0, AvMont
     data = datal.copy()
 
 
-    data["ymd"]   = pd.to_datetime(data["ymd"])
     data["month"] = data.ymd.dt.month
     #data["year"] = data.ymd.dt.year
     #data['yearofchange'] = (data["ymd"] > datetime.datetime(2015,1,1))
@@ -335,13 +334,17 @@ if __name__ == '__main__':
         'SELECT ymd, price FROM price.tab WHERE region = "{}" and products="{}" and ymd >= "{}" and ymd <= "{}"'.format(region, product, datein, dateout),
         con=connection)
 
+    df_train["ymd"]   = pd.to_datetime(df_train["ymd"])
+
     df_valute = pd.read_sql(
-        'SELECT ValueVal, dateCalendar FROM price.valuta WHERE CharCode = "{}" '.format("USD"),
+        'SELECT ValueVal, dateCalendar FROM price.valuta WHERE CharCode = "{}"  and dateCalendar >= "{}" and dateCalendar <= "{}"'.format("USD", datein, dateout),
         con=connection)
 
-    df_valute = df_valute.set_index('dateCalendar').resample('MS', label='right').agg({'ValueVal': 'median'}).reset_index()
+    dfv = df_valute.copy().set_index('dateCalendar')
+    dfv.index = pd.to_datetime(dfv.index)
+    dfv = dfv.resample('MS', label='right').agg({'ValueVal': 'mean'}).reset_index()
 
-    data = pd.merge(df_train, df_valute, left_on='ymd', right_on='dateCalendar', how ='left')
+    data = pd.merge(df_train, dfv, left_on='ymd', right_on='dateCalendar', how ='left')
 
     param = {'lag':lag, 'lagVal':lag_v, 'lagS':lag_s,  'AvPr':AvPr, 'winWeather':winWeather, 'AvMonth':AvMonth, 'tr':trend_param}
     datatab= getTestData(data, **param)
