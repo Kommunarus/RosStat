@@ -46,8 +46,8 @@ def getTestData(datal, lag=0, lagVal =0, lagS =0, AvPr = 0, winWeather=0, AvMont
 
     data["ymd"]   = pd.to_datetime(data["ymd"])
     data["month"] = data.ymd.dt.month
-    data["year"] = data.ymd.dt.year
-    data['yearofchange'] = (data["ymd"] > datetime.datetime(2015,1,1))
+    #data["year"] = data.ymd.dt.year
+    #data['yearofchange'] = (data["ymd"] > datetime.datetime(2015,1,1))
 
     data = data.replace({"price": {0: np.nan}})
     data["price"].interpolate(inplace =True)
@@ -67,7 +67,7 @@ def getTestData(datal, lag=0, lagVal =0, lagS =0, AvPr = 0, winWeather=0, AvMont
 
     data["PriceWithOutTrend"] = data["price_boxcox"] - data["Trend"]
 
-    data["diff"] = data["PriceWithOutTrend"] - data["PriceWithOutTrend"].shift(1)
+    #data["diff"] = data["PriceWithOutTrend"] - data["PriceWithOutTrend"].shift(1)
     #data["diff2"] = data["PriceWithOutTrend"] - data["PriceWithOutTrend"].shift(2)
     #data.loc[0, "diff"] = 0
     #data.loc[[0,1], "diff2"] = 0
@@ -125,19 +125,19 @@ def getTestData(datal, lag=0, lagVal =0, lagS =0, AvPr = 0, winWeather=0, AvMont
         df.loc[ df['indexmonth'] % 2 == 0, 'cumT'] = 0
         df.loc[ df['indexmonth'] % 2 == 0, 'cumR'] = 0
 
-        for i in range(1,lag+1):
-            if i != 0:
-                df["cumT{}".format(i)] = df.cumT.shift(i)
-                df["cumR{}".format(i)] = df.cumR.shift(i)
 
         df.drop('T', inplace = True, axis=1,)
         df.drop('R', inplace = True, axis=1,)
         df.drop('ymd', inplace = True, axis=1,)
         df.drop('indexmonth', inplace = True, axis=1,)
+        for i in range(1,30,7):
+            df["cumT{}".format(i)] = df.cumT.shift(i)
+            df["cumR{}".format(i)] = df.cumR.shift(i)
         data = pd.merge(data, df, on=['ymd'], how='left', suffixes=('data', 'dt_weather'))
         #data = pd.merge(data, df, on=['ymd'], how='left', suffixes=('data', 'df2'))
 
-
+    if lagVal == 0:
+        data.drop(["ValueVal"], axis=1, inplace=True)
     data.drop(["price"], axis=1, inplace=True)
     data.drop(["price_boxcox"], axis=1, inplace=True)
     data.drop(["ymd"], axis=1, inplace=True)
@@ -222,18 +222,30 @@ def performTimeSeriesCV(X_train, y_train, number_folds, model, metrics):
     return errors.mean()
 
 
-def predict_dot(df_train, df_valute, param, xgbts, y_past):
+def predict_dot(df_train, df_valute, param, xgbts, y_past, listValV, listDateV):
 
     df_train_copy = df_train.copy()
     past_ymd = df_train_copy.iloc[-1, :].ymd
 
     if len(y_past) != 0:
         for indd, past_value in enumerate(y_past):
-            df_train_copy = df_train_copy.append({'price': past_value, 'ymd': past_ymd + relativedelta(months=+1)},
+            df_train_copy = df_train_copy.append({'price': past_value, 'ymd': past_ymd + relativedelta(months=+(1+indd))},
                                                  ignore_index=True)
         past_ymd = past_ymd + relativedelta(months=+(1 + len(y_past)))
         df_train_copy = df_train_copy.append({'price': 0, 'ymd': past_ymd}, ignore_index=True)
-    data = pd.merge(df_train_copy, df_valute, left_on='ymd', right_on='dateCalendar')
+    data = pd.merge(df_train_copy, df_valute, left_on='ymd', right_on='dateCalendar', how ='left')
+
+    dfv = pd.DataFrame({'ymd': listDateV, 'ValueVal': listValV})
+    dfv.ymd = pd.to_datetime(dfv["ymd"])
+
+    data = data.set_index('ymd')
+    dfv = dfv.set_index('ymd')
+    c = data.ValueVal
+    c.update(dfv.ValueVal)
+    data['ValueVal'] = c
+    data = data.reset_index()
+
+    #data['ValueVal'] = data['ymd'].map(dfv.set_index('ymd')['Val'])
 
     datatab = getTestData(data, **param)
 
@@ -263,6 +275,8 @@ def createParser():
     parser.add_argument('--nforecast', type=int, default=12)
     parser.add_argument('--datein', type=lambda s: datetime.datetime.strptime(s, '%Y-%m-%d'), default=datetime.date(1,1,1))
     parser.add_argument('--dateout', type=lambda s: datetime.datetime.strptime(s, '%Y-%m-%d'), default=datetime.date(2999,1,1))
+    parser.add_argument('--listValV', nargs='+', default=[])
+    parser.add_argument('--listDateV', nargs='+', default=[])
 
     return parser
 
@@ -294,7 +308,27 @@ if __name__ == '__main__':
     trend_param = namespace.trend_param
     datein = namespace.datein
     dateout = namespace.dateout
+    listValV  = list(map(lambda x: float(x), namespace.listValV))
+    listDateV = list(map(lambda s: datetime.datetime.strptime(s, '%Y-%m-%d'), namespace.listDateV))
 
+    '''id = 'cfed2'
+    max_depth =8
+    lag =20
+    lag_s =0
+    AvPr =0
+    lag_v =3
+    trend_param =1
+    AvMonth =0
+    winWeather =1
+    region ="Краснодарский край"
+    product ="Огурцы"
+    lmbda =0.25
+    nforecast =36
+    datein ='2011-02-01'
+    dateout ='2018-08-01'
+    listValV  = [70, 80, 90, 100, 150, 150, 150, 160, 170, 170, 170, 180, 180, 170, 180, 170, 180, 170, 180, 170]
+    listDateV = list(map(lambda s: datetime.datetime.strptime(s, '%Y-%m-%d'), ['2018-09-01', '2018-10-01', '2018-11-01', '2018-12-01', '2019-01-01', '2019-02-01', '2019-03-01', '2019-04-01', '2019-05-01', '2019-06-01', '2019-07-01', '2019-08-01', '2019-09-01', '2019-10-01', '2019-11-01', '2019-12-01', '2020-01-01', '2020-02-01', '2020-03-01', '2020-04-01' ]))
+    '''
 
 
     df_train = pd.read_sql(
@@ -305,12 +339,11 @@ if __name__ == '__main__':
         'SELECT ValueVal, dateCalendar FROM price.valuta WHERE CharCode = "{}" '.format("USD"),
         con=connection)
 
+    df_valute = df_valute.set_index('dateCalendar').resample('MS', label='right').agg({'ValueVal': 'median'}).reset_index()
 
+    data = pd.merge(df_train, df_valute, left_on='ymd', right_on='dateCalendar', how ='left')
 
-    data = pd.merge(df_train, df_valute, left_on='ymd', right_on='dateCalendar')
-
-
-    param = {'lag':lag, 'lagVal':lag_v, 'lagS':lag_s,  'AvPr':AvPr, 'winWeather':winWeather, 'AvMonth':AvMonth, 'tr':trend_param }
+    param = {'lag':lag, 'lagVal':lag_v, 'lagS':lag_s,  'AvPr':AvPr, 'winWeather':winWeather, 'AvMonth':AvMonth, 'tr':trend_param}
     datatab= getTestData(data, **param)
 
     datatab.drop(["Trend"], axis=1, inplace=True)
@@ -324,7 +357,7 @@ if __name__ == '__main__':
     y_past = []
     y_true = []
     for test_point in range(nforecast):
-        ypred = predict_dot(df_train, df_valute, param, xgbts, y_past)
+        ypred = predict_dot(df_train, df_valute, param, xgbts, y_past, listValV, listDateV)
         print(ypred)
         y_past.append(inv_boxcox(ypred, lmbda))
 
