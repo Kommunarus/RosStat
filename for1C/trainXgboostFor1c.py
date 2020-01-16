@@ -38,7 +38,7 @@ def f_index_month(row):
     return val
 
 
-def getTestData(datal, lag=0, lagVal =0, lagS =0, AvPr = 0, winWeather=0, AvMonth=0, y_past=[],  tr=1):
+def getTestData(datal, lag=0, lagVal =0, lagS =0, AvPr = 0, AvPrVal = 0, winWeather=0, AvMonth=0, y_past=[],  tr=1):
 
     global trend
     data = datal.copy()
@@ -98,7 +98,7 @@ def getTestData(datal, lag=0, lagVal =0, lagS =0, AvPr = 0, winWeather=0, AvMont
 
     if AvPr!= 0:
         df = data.set_index('ymd').resample('MS', label='right').first()
-        df1 = df['PriceWithOutTrend'].shift().rolling(min_periods=1, window=AvPr).agg(['mean']).reset_index()
+        df1 = df['PriceWithOutTrend'].shift().rolling(min_periods=1, window=AvPr).agg(['mean', 'max', 'min']).reset_index()
         df1 = df1.add_suffix('_AvPr')
         data = pd.merge(data, df1, left_on=['ymd'], right_on=['ymd_AvPr'], how='left')
         #data["mean_AvPr"].fillna(0, inplace=True)
@@ -107,6 +107,26 @@ def getTestData(datal, lag=0, lagVal =0, lagS =0, AvPr = 0, winWeather=0, AvMont
         for i in range(1,lag+1):
             data["mean_AvPr{}".format(i)] = data.mean_AvPr.shift(i)
             data["mean_AvPr{}".format(i)].fillna(0, inplace=True)
+            data["max_AvPr{}".format(i)] = data.max_AvPr.shift(i)
+            data["max_AvPr{}".format(i)].fillna(0, inplace=True)
+            data["min_AvPr{}".format(i)] = data.min_AvPr.shift(i)
+            data["min_AvPr{}".format(i)].fillna(0, inplace=True)
+
+    if AvPrVal != 0:
+        df = data.set_index('ymd').resample('MS', label='right').first()
+        df2 = df['ValueVal'].shift().rolling(min_periods=1, window=AvPrVal).agg(['mean', 'max', 'min']).reset_index()
+        df2 = df2.add_suffix('_AvPrVal')
+        data = pd.merge(data, df2, left_on=['ymd'], right_on=['ymd_AvPrVal'], how='left')
+        #data["mean_AvPrVal"].fillna(0, inplace=True)
+        data.drop(["ymd_AvPrVal"], axis=1, inplace=True)
+        for i in range(1,lagVal+1):
+            data["mean_AvPrVal{}".format(i)] = data.mean_AvPrVal.shift(i)
+            data["mean_AvPrVal{}".format(i)].fillna(0, inplace=True)
+            data["max_AvPrVal{}".format(i)] = data.max_AvPrVal.shift(i)
+            data["max_AvPrVal{}".format(i)].fillna(0, inplace=True)
+            data["min_AvPrVal{}".format(i)] = data.min_AvPrVal.shift(i)
+            data["min_AvPrVal{}".format(i)].fillna(0, inplace=True)
+
 
 
     if winWeather != 0:
@@ -232,6 +252,8 @@ def predict_dot(df_train, df_valute, param, xgbts, y_past, listValV, listDateV):
                                                  ignore_index=True)
         past_ymd = past_ymd + relativedelta(months=+(1 + len(y_past)))
         df_train_copy = df_train_copy.append({'price': 0, 'ymd': past_ymd}, ignore_index=True)
+
+
     data = pd.merge(df_train_copy, df_valute, left_on='ymd', right_on='dateCalendar', how ='left')
 
     dfv = pd.DataFrame({'ymd': listDateV, 'ValueVal': listValV})
@@ -264,6 +286,7 @@ def createParser():
     parser.add_argument('--max_depth', type=int, default=3)
     parser.add_argument('--lag_s', type=int, default=0)
     parser.add_argument('--AvPr', type=int, default=0)
+    parser.add_argument('--AvPrVal', type=int, default=0)
     parser.add_argument('--lag_v', type=int, default=0)
     parser.add_argument('--AvMonth', type=int, default=0)
     parser.add_argument('--winWeather', type=int, default=0)
@@ -301,6 +324,7 @@ if __name__ == '__main__':
     max_depth = namespace.max_depth
     lag_s = namespace.lag_s
     AvPr = namespace.AvPr
+    AvPrVal = namespace.AvPrVal
     lag_v = namespace.lag_v
     AvMonth = namespace.AvMonth
     winWeather = namespace.winWeather
@@ -342,11 +366,11 @@ if __name__ == '__main__':
 
     dfv = df_valute.copy().set_index('dateCalendar')
     dfv.index = pd.to_datetime(dfv.index)
-    dfv = dfv.resample('MS', label='right').agg({'ValueVal': 'mean'}).reset_index()
+    df_valute = dfv.resample('MS', label='right').agg({'ValueVal': 'median'}).reset_index()
 
-    data = pd.merge(df_train, dfv, left_on='ymd', right_on='dateCalendar', how ='left')
+    data = pd.merge(df_train, df_valute, left_on='ymd', right_on='dateCalendar', how ='left')
 
-    param = {'lag':lag, 'lagVal':lag_v, 'lagS':lag_s,  'AvPr':AvPr, 'winWeather':winWeather, 'AvMonth':AvMonth, 'tr':trend_param}
+    param = {'lag':lag, 'lagVal':lag_v, 'lagS':lag_s,  'AvPr':AvPr, 'AvPrVal':AvPrVal, 'winWeather':winWeather, 'AvMonth':AvMonth, 'tr':trend_param}
     datatab= getTestData(data, **param)
 
     datatab.drop(["Trend"], axis=1, inplace=True)
