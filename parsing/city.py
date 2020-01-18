@@ -15,7 +15,7 @@ connection = pymysql.connect(
     cursorclass=DictCursor
 )
 
-params = {'id':'ru', 'region':23}
+params = {'id':'ru', 'region':38}
 r = requests.get('http://www.pogodaiklimat.ru/archive.php', params=params)
 r.encoding = r.apparent_encoding
 
@@ -26,7 +26,7 @@ for row in list:
     li = row.getchildren()[0]
     query = "INSERT INTO price.city_id_weather(id, region, city) " \
             "VALUES(%s,%s,%s)"
-    args = (li.attrib['href'], 'Краснодарский край', li.text_content())
+    args = (li.attrib['href'], 'Иркутская область', li.text_content())
     cursor = connection.cursor()
     cursor.execute(query, args)
     connection.commit()

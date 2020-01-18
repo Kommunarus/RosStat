@@ -6,6 +6,8 @@ from pymysql.cursors import DictCursor
 import pandas as pd
 import statsmodels.api as sm
 import datetime
+from dateutil.relativedelta import *
+
 
 from scipy.special import boxcox, inv_boxcox
 
@@ -70,10 +72,10 @@ if __name__ == '__main__':
 
 
     mod = sm.tsa.statespace.SARIMAX(train, order=(p, d, q),
-                                    seasonal_order=(sp, sd, q, ss))
+                                    seasonal_order=(sp, sd, sq, ss))
     res = mod.fit(disp=False)
 
-
+    param = {'p':p, 'd':d, 'q':q, 'sp':sp, 'sd':sd, 'sq':sq, 'ss':ss}
     predict = res.get_prediction(end=mod.nobs + nforecast)
 
     p_main = inv_boxcox(predict.predicted_mean, lmbda)
@@ -82,14 +84,19 @@ if __name__ == '__main__':
     predict_ci2 = inv_boxcox(predict.conf_int(alpha=0.5)[:,1], lmbda)
     print(len(p_main))
     for ii in range(nforecast):
-        query = "INSERT INTO price.sarima_predict_1c(id, ymd, mean, up, botton) " \
-                "VALUES(%s,%s,%s,%s,%s)"
+        query = "INSERT INTO price.sarima_predict_1c(id, ymd, mean, up, botton, ymd_date, comment_text, region, product,model) " \
+                "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)"
         index = ii+1
         args = (id,
                 nforecast-ii,
                 float(p_main[-index]),
                 0 if np.isnan(predict_ci2[-index])  else float(predict_ci2[-index]),
-                0 if np.isnan(predict_ci1[-index]) else float(predict_ci1[-index]))
+                0 if np.isnan(predict_ci1[-index]) else float(predict_ci1[-index]),
+                dateout + relativedelta(months=+(nforecast-ii)),
+                ' '.join(['{}:{}'.format(k, i) for (k, i) in param.items()]),
+                region,
+                product,
+                'sarima')
 
         print(args)
         cursor = connection.cursor()

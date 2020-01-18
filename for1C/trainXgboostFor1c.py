@@ -9,6 +9,7 @@ import xgboost as xgb
 from scipy.special import boxcox, inv_boxcox
 import argparse
 from sklearn.base import BaseEstimator, TransformerMixin
+import matplotlib.pyplot as plt
 import warnings
 warnings.simplefilter(action='ignore', category=FutureWarning)
 
@@ -37,8 +38,29 @@ def f_index_month(row):
         val = 0
     return val
 
+def date_range(start, stop, step):
+    while start < stop:
+        yield start
+        start += step
 
-def getTestData(datal, lag=0, lagVal =0, lagS =0, AvPr = 0, AvPrVal = 0, winWeather=0, AvMonth=0, y_past=[],  tr=1):
+def newT(d, meanT, twinter, tsummer, tsping, tautomn):
+
+    month = d.month
+    prd = pd.Period(freq='D', year=d.year, month=d.month, day=d.day)
+    if month in (1,2,12):
+        return meanT[prd.dayofyear] * (1 + (twinter - 100)/100)
+    if month in (3,4,5):
+        return meanT[prd.dayofyear] * (1 + (tsping - 100)/100)
+    if month in (6,7,8):
+        return meanT[prd.dayofyear] * (1 + (tsummer - 100)/100)
+    if month in (9,10,11):
+        return meanT[prd.dayofyear] * (1 + (tautomn - 100)/100)
+
+
+
+def getTestData(datal, train = False, lag=0, lagVal =0, lagS =0, AvPr = 0, AvPrVal = 0, winWeather=0, AvMonth=0,  tr=1,
+                twinter=100, tsummer=100, tsping=100, tautomn=100, rwinter=100, rsummer=100, rsping=100, rautomn=100,
+                dateout=None, nforecast=1):
 
     global trend
     data = datal.copy()
@@ -56,7 +78,7 @@ def getTestData(datal, lag=0, lagVal =0, lagS =0, AvPr = 0, AvPrVal = 0, winWeat
 
     data["price_boxcox"] = boxcox( data["price"], lmbda)
 
-    if len(y_past) == 0:
+    if train:
         x = data['ymd'].map(datetime.datetime.toordinal)
 
         trend = np.poly1d(np.polyfit(x.values, data.price_boxcox.values, tr))
@@ -131,11 +153,28 @@ def getTestData(datal, lag=0, lagVal =0, lagS =0, AvPr = 0, AvPrVal = 0, winWeat
 
     if winWeather != 0:
         dt_weather = pd.read_sql(
-            'SELECT UTC as ymd, T, R FROM price.weather WHERE id = "{}" '.format(
-                "/weather.php?id=37006"),
+            'SELECT UTC as ymd, T, R FROM price.weather WHERE id = "{}" and UTC <= "{}"'.format(
+                "/weather.php?id=30710", dateout),
             con=connection)
-        df = dt_weather.set_index('ymd').resample('D', label='right').agg({'T': 'mean', 'R': 'mean'})
-        df['ymd'] = df.index
+        df = dt_weather.set_index('ymd').resample('D', label='right').agg({'T': 'mean', 'R': 'mean'}).reset_index()
+        date_start_pred = dateout + relativedelta(months=+1)
+        date_stop_pred = dateout + relativedelta(months=+(nforecast+1))
+
+        #df['ymd'] = pd.to_datetime(df["ymd"])
+        df['dayofyear'] = df.ymd.dt.dayofyear
+        meanT = df.groupby('dayofyear')['T'].mean()
+        meanR = df.groupby('dayofyear')['R'].mean()
+
+
+        for d in date_range( date_start_pred, date_stop_pred, datetime.timedelta(days=1)):
+            df = pd.concat([df,  pd.DataFrame.from_dict({'ymd': [datetime.datetime(d.year, d.month, d.day)],
+                            'T': [newT(d, meanT, twinter, tsummer, tsping, tautomn)],
+                            'R': [newT(d, meanR, rwinter, rsummer, rsping, rautomn)],
+                            'dayofyear':[1] })], ignore_index=True)
+
+
+
+        #df['ymd'] = df.index
         df['indexmonth'] = df.apply(f_index_month, axis=1)
         df['indexmonth'] = df['indexmonth'].cumsum()
         df['cumT'] = df.groupby('indexmonth')['T'].cumsum()
@@ -144,15 +183,16 @@ def getTestData(datal, lag=0, lagVal =0, lagS =0, AvPr = 0, AvPrVal = 0, winWeat
         df.loc[ df['indexmonth'] % 2 == 0, 'cumT'] = 0
         df.loc[ df['indexmonth'] % 2 == 0, 'cumR'] = 0
 
-
+        #df = df.set_index('ymd')
+        df.drop('dayofyear', inplace = True, axis=1,)
         df.drop('T', inplace = True, axis=1,)
         df.drop('R', inplace = True, axis=1,)
-        df.drop('ymd', inplace = True, axis=1,)
+        #df.drop('ymd2', inplace = True, axis=1,)
         df.drop('indexmonth', inplace = True, axis=1,)
-        for i in range(1,30,7):
+        for i in range(1,int(7*lag),7):
             df["cumT{}".format(i)] = df.cumT.shift(i)
             df["cumR{}".format(i)] = df.cumR.shift(i)
-        data = pd.merge(data, df, on=['ymd'], how='left', suffixes=('data', 'dt_weather'))
+        data = pd.merge(data, df, left_on='ymd', right_on = 'ymd', how='left', suffixes=('data', 'dt_weather'))
         #data = pd.merge(data, df, on=['ymd'], how='left', suffixes=('data', 'df2'))
 
     if lagVal == 0:
@@ -256,6 +296,7 @@ def predict_dot(df_train, df_valute, param, xgbts, y_past, listValV, listDateV):
 
     data = pd.merge(df_train_copy, df_valute, left_on='ymd', right_on='dateCalendar', how ='left')
 
+    # заменяем валюту на пользовательскую
     dfv = pd.DataFrame({'ymd': listDateV, 'ValueVal': listValV})
     dfv.ymd = pd.to_datetime(dfv["ymd"])
 
@@ -268,7 +309,7 @@ def predict_dot(df_train, df_valute, param, xgbts, y_past, listValV, listDateV):
 
     #data['ValueVal'] = data['ymd'].map(dfv.set_index('ymd')['Val'])
 
-    datatab = getTestData(data, **param)
+    datatab = getTestData(data, train = False, **param)
 
     X_test = datatab.iloc[[-1]].drop(["PriceWithOutTrend"], axis=1)
     Trend  = X_test["Trend"]
@@ -282,23 +323,32 @@ def predict_dot(df_train, df_valute, param, xgbts, y_past, listValV, listDateV):
 def createParser():
     parser = argparse.ArgumentParser()
     parser.add_argument('--id', default='x1c2v3')
-    parser.add_argument('--lag', type=int, default=0)
-    parser.add_argument('--max_depth', type=int, default=3)
+    parser.add_argument('--lag', type=int, default=20)
+    parser.add_argument('--max_depth', type=int, default=6)
     parser.add_argument('--lag_s', type=int, default=0)
     parser.add_argument('--AvPr', type=int, default=0)
     parser.add_argument('--AvPrVal', type=int, default=0)
     parser.add_argument('--lag_v', type=int, default=0)
     parser.add_argument('--AvMonth', type=int, default=0)
-    parser.add_argument('--winWeather', type=int, default=0)
-    parser.add_argument('--trend_param', type=int, default=0)
-    parser.add_argument('--lmbda', type=float, default=1)
-    parser.add_argument('--region', default='Российская Федерация')
-    parser.add_argument('--product', default='Картофель')
+    parser.add_argument('--winWeather', type=int, default=1)
+    parser.add_argument('--trend_param', type=int, default=1)
+    parser.add_argument('--lmbda', type=float, default=0.25)
+    parser.add_argument('--region', default='Иркутская область')
+    parser.add_argument('--product', default='Зерновые и зернобобовые культуры')
     parser.add_argument('--nforecast', type=int, default=12)
-    parser.add_argument('--datein', type=lambda s: datetime.datetime.strptime(s, '%Y-%m-%d'), default=datetime.date(1,1,1))
-    parser.add_argument('--dateout', type=lambda s: datetime.datetime.strptime(s, '%Y-%m-%d'), default=datetime.date(2999,1,1))
+    parser.add_argument('--datein', type=lambda s: datetime.datetime.strptime(s, '%Y-%m-%d'), default=datetime.date(2011,1,1))
+    parser.add_argument('--dateout', type=lambda s: datetime.datetime.strptime(s, '%Y-%m-%d'), default=datetime.date(2017,12,1))
     parser.add_argument('--listValV', nargs='+', default=[])
     parser.add_argument('--listDateV', nargs='+', default=[])
+    parser.add_argument('--twinter', type=float, default=10)
+    parser.add_argument('--tsummer', type=float, default=10)
+    parser.add_argument('--tsping', type=float, default=10)
+    parser.add_argument('--tautomn', type=float, default=10)
+    parser.add_argument('--rwinter', type=float, default=10)
+    parser.add_argument('--rsummer', type=float, default=10)
+    parser.add_argument('--rsping', type=float, default=10)
+    parser.add_argument('--rautomn', type=float, default=10)
+
 
     return parser
 
@@ -333,6 +383,14 @@ if __name__ == '__main__':
     dateout = namespace.dateout
     listValV  = list(map(lambda x: float(x), namespace.listValV))
     listDateV = list(map(lambda s: datetime.datetime.strptime(s, '%Y-%m-%d'), namespace.listDateV))
+    twinter = namespace.twinter
+    tsummer = namespace.tsummer
+    tsping = namespace.tsping
+    tautomn = namespace.tautomn
+    rwinter = namespace.rwinter
+    rsummer = namespace.rsummer
+    rsping = namespace.rsping
+    rautomn = namespace.rautomn
 
     '''id = 'cfed2'
     max_depth =8
@@ -370,8 +428,12 @@ if __name__ == '__main__':
 
     data = pd.merge(df_train, df_valute, left_on='ymd', right_on='dateCalendar', how ='left')
 
-    param = {'lag':lag, 'lagVal':lag_v, 'lagS':lag_s,  'AvPr':AvPr, 'AvPrVal':AvPrVal, 'winWeather':winWeather, 'AvMonth':AvMonth, 'tr':trend_param}
-    datatab= getTestData(data, **param)
+    param = {'lag':lag, 'lagVal':lag_v, 'lagS':lag_s,  'AvPr':AvPr, 'AvPrVal':AvPrVal, 'winWeather':winWeather, 'AvMonth':AvMonth, 'tr':trend_param,
+             'twinter':twinter, 'tsummer':tsummer, 'tsping':tsping, 'tautomn':tautomn,
+             'rwinter':rwinter, 'rsummer':rsummer, 'rsping':rsping, 'rautomn':rautomn,
+             'dateout':dateout, 'nforecast':nforecast
+             }
+    datatab= getTestData(data, train = True, **param)
 
     datatab.drop(["Trend"], axis=1, inplace=True)
     X_train = datatab.drop(["PriceWithOutTrend"], axis=1)
@@ -388,19 +450,24 @@ if __name__ == '__main__':
         print(ypred)
         y_past.append(inv_boxcox(ypred, lmbda))
 
-        query = "INSERT INTO price.sarima_predict_1c(id, ymd, mean, up, botton) " \
-                "VALUES(%s,%s,%s,%s,%s)"
+        query = "INSERT INTO price.sarima_predict_1c(id, ymd, mean, up, botton, ymd_date, comment_text, region, product, model) " \
+                "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)"
         args = (id,
                 test_point,
                 float(inv_boxcox(ypred, lmbda)),
                 0,
-                0)
+                0,
+                dateout + relativedelta(months=+(1+test_point)),
+                ' '.join(['{}:{}'.format(k, i) for (k, i) in param.items()]),
+                region,
+                product,
+                'xgboost')
 
         cursor = connection.cursor()
-        try:
-            cursor.execute(query, args)
-        except:
-            print('error')
+        #try:
+        cursor.execute(query, args)
+        #except:
+        #    print('error')
         connection.commit()
 
 
