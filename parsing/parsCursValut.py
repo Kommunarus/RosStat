@@ -16,9 +16,9 @@ connection = pymysql.connect(
 )
 
 # 2015 -09 -23
-for y in range(2019,2020):
-    for m in range(1,2):
-        for d in range(1, 24):
+for y in range(2017,2020):
+    for m in range(1,13):
+        for d in range(1, 32):
             params = {'date_req':'{:02}.{:02}.{}'.format(d,m,y)}
             response = requests.get('http://www.cbr.ru/scripts/XML_daily.asp', params = params)
 

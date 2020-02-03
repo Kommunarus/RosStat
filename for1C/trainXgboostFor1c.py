@@ -67,6 +67,7 @@ def getTestData(datal, train = False, lag=0, lagVal =0, lagS =0, AvPr = 0, AvPrV
 
 
     data["month"] = data.ymd.dt.month
+    data["week"] = data.ymd.dt.weekofyear
     #data["year"] = data.ymd.dt.year
     #data['yearofchange'] = (data["ymd"] > datetime.datetime(2015,1,1))
 
@@ -281,16 +282,16 @@ def performTimeSeriesCV(X_train, y_train, number_folds, model, metrics):
     return errors.mean()
 
 
-def predict_dot(df_train, df_valute, param, xgbts, y_past, listValV, listDateV):
+def predict_dot(df_train, df_valute, param, xgbts, y_past, listValV, listDateV, timeforcast):
 
     df_train_copy = df_train.copy()
     past_ymd = df_train_copy.iloc[-1, :].ymd
 
     if len(y_past) != 0:
         for indd, past_value in enumerate(y_past):
-            df_train_copy = df_train_copy.append({'price': past_value, 'ymd': past_ymd + relativedelta(months=+(1+indd))},
+            df_train_copy = df_train_copy.append({'price': past_value, 'ymd': (past_ymd + relativedelta(months=+(1+indd))) if timeforcast == "m" else (past_ymd + relativedelta(weeks=+(1+indd)))  },
                                                  ignore_index=True)
-        past_ymd = past_ymd + relativedelta(months=+(1 + len(y_past)))
+        past_ymd = (past_ymd + relativedelta(months=+(1 + len(y_past)))) if timeforcast == "m" else (past_ymd + relativedelta(weeks=+(1 + len(y_past))))
         df_train_copy = df_train_copy.append({'price': 0, 'ymd': past_ymd}, ignore_index=True)
 
 
@@ -348,6 +349,7 @@ def createParser():
     parser.add_argument('--rsummer', type=float, default=10)
     parser.add_argument('--rsping', type=float, default=10)
     parser.add_argument('--rautomn', type=float, default=10)
+    parser.add_argument('--timeforcast', type=str, default='m')
 
 
     return parser
@@ -391,6 +393,7 @@ if __name__ == '__main__':
     rsummer = namespace.rsummer
     rsping = namespace.rsping
     rautomn = namespace.rautomn
+    timeforcast = namespace.timeforcast
 
     '''id = 'cfed2'
     max_depth =8
@@ -413,7 +416,7 @@ if __name__ == '__main__':
 
 
     df_train = pd.read_sql(
-        'SELECT ymd, price FROM price.tab WHERE region = "{}" and products="{}" and ymd >= "{}" and ymd <= "{}"'.format(region, product, datein, dateout),
+        'SELECT ymd, price FROM price.tab_price WHERE region = "{}" and product="{}" and ymd >= "{}" and ymd <= "{}"'.format(region, product, datein, dateout),
         con=connection)
 
     df_train["ymd"]   = pd.to_datetime(df_train["ymd"])
@@ -445,23 +448,25 @@ if __name__ == '__main__':
     print(err_par)
     y_past = []
     y_true = []
+    date_predict = datetime.datetime.now()
     for test_point in range(nforecast):
-        ypred = predict_dot(df_train, df_valute, param, xgbts, y_past, listValV, listDateV)
+        ypred = predict_dot(df_train, df_valute, param, xgbts, y_past, listValV, listDateV, timeforcast)
         print(ypred)
         y_past.append(inv_boxcox(ypred, lmbda))
 
-        query = "INSERT INTO price.sarima_predict_1c(id, ymd, mean, up, botton, ymd_date, comment_text, region, product, model) " \
-                "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)"
+        query = "INSERT INTO price.predict_1c(id, ymd_number, mean, up, botton, ymd_date, comment_text, region, product, model, date_predict) " \
+                "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)"
         args = (id,
                 test_point,
                 float(inv_boxcox(ypred, lmbda)),
                 0,
                 0,
-                dateout + relativedelta(months=+(1+test_point)),
+                (dateout + relativedelta(months=+(1+test_point))) if timeforcast == "m" else (dateout + relativedelta(weeks=+(1+test_point))),
                 ' '.join(['{}:{}'.format(k, i) for (k, i) in param.items()]),
                 region,
                 product,
-                'xgboost')
+                'xgboost',
+                date_predict)
 
         cursor = connection.cursor()
         #try:

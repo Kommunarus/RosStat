@@ -61,7 +61,7 @@ def getPredict(namespace):
 
 
     df = pd.read_sql(
-        'SELECT ymd, price FROM price.tab WHERE region = "{}" and products="{}" and ymd > "{}" and ymd < "{}"'.format(region, sproduct, datein, dateout),
+        'SELECT ymd, price FROM price.tab_price WHERE region = "{}" and product="{}" and ymd > "{}" and ymd < "{}"'.format(region, sproduct, datein, dateout),
         con=connection)
 
 

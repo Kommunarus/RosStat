@@ -63,7 +63,7 @@ for i in ss['results']:
             x = k.split('_')
             y = x[0].replace('dim','')
             m = periods[x[1]]
-            query = "INSERT INTO price.tab(region, products, ymd, price, type) " \
+            query = "INSERT INTO price.tab_price(region, product, ymd, price, type_price) " \
                     "VALUES(%s,%s,%s,%s,%s)"
             args = (reg, prod, datetime.datetime(int(y),int(m),1).strftime('%Y-%m-%d %H:%M:%S'), float(v.replace(',','.')), 'rosstat')
             cursor = connection.cursor()

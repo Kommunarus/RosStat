@@ -44,17 +44,28 @@ for row in ws.rows:
     count += 1
     #if count >= 20:
     #    break
-    if count >= 5:
-        region = row[0].value
-        ymd    = datetime.datetime.strptime(row[3].value, '%d.%m.%Y %H:%M:%S')
-        product = row[4].value
-        price = float(row[6].value)
-        #print('{} \t {} \t {} \t {}'.format(region, ymd, product, price))
-        query = "INSERT INTO price.tab(region, products, ymd, price, type) " \
-                "VALUES(%s,%s,%s,%s,%s)"
-        args = (region, product, ymd.strftime('%Y-%m-%d %H:%M:%S'), price, 'smpb')
-        cursor = connection.cursor()
-        cursor.execute(query, args)
-        connection.commit()
+    for pro in range(0,4):
+        if count >= 2:
+            region = row[0].value
+            ymd    = row[5].value
+            if pro == 0:
+                product = "Гречиха"
+                price = float(row[1].value)
+            if pro == 1:
+                product = "Говядина (убойны вес)"
+                price = float(row[2].value)
+            if pro == 2:
+                product = "Молоко сырое"
+                price = float(row[3].value)
+            if pro == 3:
+                product = "Свинина (убойны вес)"
+                price = float(row[4].value)
+            #print('{} \t {} \t {} \t {}'.format(region, ymd, product, price))
+            query = "INSERT INTO price.tab_price(region, product, ymd, price, type_price) " \
+                    "VALUES(%s,%s,%s,%s,%s)"
+            args = (region, product, ymd.strftime('%Y-%m-%d %H:%M:%S'), price, 'smpb')
+            cursor = connection.cursor()
+            cursor.execute(query, args)
+            connection.commit()
 
 connection.close()
